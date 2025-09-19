@@ -1,0 +1,5 @@
+.DS_Store
+__pycache__
+test_outputs
+.env
+.ec2_public_ip
