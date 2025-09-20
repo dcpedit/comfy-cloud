@@ -4,19 +4,11 @@ set -e
 # EC2 Optimized Deployment Script for ComfyUI on g4dn.2xlarge
 # NVIDIA Driver fixes and Ubuntu 24.04 compatibility included
 
-echo "===================================="
-echo "ComfyUI EC2 Optimized Deployment"
-echo "Instance Type: g4dn.2xlarge"
-echo "NVIDIA Drivers: Fixed for Ubuntu 24.04"
-echo "===================================="
-
-# Configuration
-INSTANCE_TYPE="g4dn.2xlarge"
+# Configuration defaults (will be overridden by .env file)
+DEFAULT_INSTANCE_TYPE="g4dn.2xlarge"
+DEFAULT_VOLUME_SIZE=150  # Increased from 100GB to accommodate large AI models
 AMI_ID="ami-0e2c8caa4b6378d8c"  # Ubuntu 24.04 LTS in us-east-1 (update for your region)
-KEY_NAME="${EC2_KEY_NAME}"  # Required: Set EC2_KEY_NAME env var with your key pair name
-SECURITY_GROUP="${EC2_SECURITY_GROUP}"  # Required: Set EC2_SECURITY_GROUP env var
 INSTANCE_NAME="ComfyUI-Server-Optimized"
-S3_MODEL_BUCKET="comfyui-models-dp"  # Hardcoded S3 bucket
 
 # Colors for output
 RED='\033[0;31m'
@@ -30,11 +22,29 @@ load_env() {
         echo -e "${YELLOW}Loading configuration from .env file...${NC}"
         export $(grep -v '^#' .env | xargs)
     fi
+
+    # Set configuration variables after loading .env
+    INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-$DEFAULT_INSTANCE_TYPE}"
+    VOLUME_SIZE="${EC2_VOLUME_SIZE:-$DEFAULT_VOLUME_SIZE}"
+    KEY_NAME="${EC2_KEY_NAME}"
+    SECURITY_GROUP="${EC2_SECURITY_GROUP}"
+    S3_MODELS_BUCKET="${S3_MODELS_BUCKET:-comfyui-models-dp}"
+}
+
+# Display deployment header
+show_header() {
+    echo "===================================="
+    echo "ComfyUI EC2 Optimized Deployment"
+    echo "Instance Type: ${INSTANCE_TYPE}"
+    echo "Volume Size: ${VOLUME_SIZE}GB"
+    echo "NVIDIA Drivers: Fixed for Ubuntu 24.04"
+    echo "===================================="
 }
 
 # Function to check prerequisites
 check_prerequisites() {
     load_env
+    show_header
     echo -e "${YELLOW}Checking prerequisites...${NC}"
 
     # Check AWS CLI
@@ -60,6 +70,17 @@ check_prerequisites() {
         echo -e "${RED}Please set EC2_SECURITY_GROUP environment variable with your security group ID${NC}"
         echo -e "${YELLOW}Example: export EC2_SECURITY_GROUP=sg-0123456789abcdef${NC}"
         exit 1
+    fi
+
+    # Validate instance type (basic check for GPU instances)
+    if [[ ! "$INSTANCE_TYPE" =~ ^(g[4-6]|p[2-5]|gr) ]]; then
+        echo -e "${YELLOW}Warning: Instance type '$INSTANCE_TYPE' may not have GPU support${NC}"
+        echo -e "${YELLOW}Recommended GPU instance types: g6.xlarge, g4dn.2xlarge, g5.2xlarge, p3.2xlarge${NC}"
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
     fi
 
     # Verify key pair exists
@@ -145,42 +166,11 @@ fi
 mkdir -p /home/ubuntu/comfyui
 chown ubuntu:ubuntu /home/ubuntu/comfyui
 
-# Setup EBS volume for models
-echo "Setting up EBS volume for models..."
-sleep 30  # Wait for EBS volume to be attached
-# Find the EBS volume (usually nvme2n1 for second attached volume)
-EBS_DEVICE=""
-for device in /dev/nvme2n1 /dev/nvme1n1 /dev/xvdf; do
-    if [ -b "$device" ]; then
-        # Check if it's not the root volume
-        if ! lsblk "$device" | grep -q "/"; then
-            EBS_DEVICE="$device"
-            break
-        fi
-    fi
-done
-
-if [ -n "$EBS_DEVICE" ]; then
-    echo "Found EBS volume: $EBS_DEVICE"
-    # Format if not already formatted
-    if ! blkid "$EBS_DEVICE"; then
-        echo "Formatting EBS volume..."
-        mkfs.ext4 "$EBS_DEVICE"
-    fi
-
-    # Create mount point and mount
-    mkdir -p /mnt/comfyui-models
-    mount "$EBS_DEVICE" /mnt/comfyui-models
-    chown ubuntu:ubuntu /mnt/comfyui-models
-
-    # Add to fstab for persistent mounting
-    EBS_UUID=$(blkid -s UUID -o value "$EBS_DEVICE")
-    echo "UUID=$EBS_UUID /mnt/comfyui-models ext4 defaults,nofail 0 2" >> /etc/fstab
-
-    echo "EBS volume mounted at /mnt/comfyui-models"
-else
-    echo "Warning: No EBS volume found"
-fi
+# Create working directory for models (using local storage)
+echo "Setting up local model storage..."
+mkdir -p /home/ubuntu/models
+chown ubuntu:ubuntu /home/ubuntu/models
+echo "✓ Local model storage ready at /home/ubuntu/models"
 
 # Mark completion
 touch /home/ubuntu/user-data-complete
@@ -261,7 +251,7 @@ S3_POLICY
         --key-name "$KEY_NAME" \
         --security-group-ids "$SECURITY_GROUP" \
         --iam-instance-profile Name="$INSTANCE_PROFILE_NAME" \
-        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3}" \
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=$VOLUME_SIZE,VolumeType=gp3}" \
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME}]" \
         --user-data file:///tmp/user_data_optimized.sh \
         --output text \
@@ -286,18 +276,7 @@ S3_POLICY
     echo "$INSTANCE_ID" > .ec2_instance_id
     echo "$PUBLIC_IP" > .ec2_public_ip
 
-    # Create and attach EBS volume for models
-    echo -e "${YELLOW}Creating EBS volume for models...${NC}"
-    AVAILABILITY_ZONE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' --output text)
-    VOLUME_ID=$(aws ec2 create-volume --size 500 --volume-type gp3 --availability-zone "$AVAILABILITY_ZONE" --tag-specifications 'ResourceType=volume,Tags=[{Key=Name,Value=ComfyUI-Models-Storage}]' --query 'VolumeId' --output text)
-    echo -e "${GREEN}Created EBS volume: $VOLUME_ID${NC}"
-
-    # Wait for volume and attach
-    echo -e "${YELLOW}Waiting for volume to be available...${NC}"
-    aws ec2 wait volume-available --volume-ids "$VOLUME_ID"
-    echo -e "${YELLOW}Attaching EBS volume...${NC}"
-    aws ec2 attach-volume --volume-id "$VOLUME_ID" --instance-id "$INSTANCE_ID" --device /dev/xvdf
-    echo -e "${GREEN}EBS volume attached successfully${NC}"
+    echo -e "${GREEN}Instance launched successfully without EBS volumes${NC}"
 
     # Wait for SSH to be available
     echo -e "${YELLOW}Waiting for SSH to be available...${NC}"
@@ -410,8 +389,9 @@ docker run -d \
     -p 8080:8080 \
     -v $(pwd)/inputs:/app/inputs \
     -v $(pwd)/outputs:/app/outputs \
-    -v /mnt/comfyui-models:/app/ComfyUI/models \
+    -v /home/ubuntu/models:/app/ComfyUI/models \
     -e AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1} \
+    -e S3_MODELS_BUCKET=${S3_MODELS_BUCKET} \
     -e CUDA_VISIBLE_DEVICES=0 \
     -e PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512 \
     --health-cmd='curl -f http://localhost:8188/system_stats || exit 1' \
@@ -468,7 +448,7 @@ done
 # Final verification
 echo "=== Final verification ==="
 docker exec comfyui-server nvidia-smi && echo "✓ GPU accessible in container"
-docker exec comfyui-server ls /app/ComfyUI/models/ | wc -l | xargs echo "Model files found:"
+docker exec comfyui-server ls /app/ComfyUI/models/ | wc -l | xargs echo "Model directories found:"
 
 echo ""
 echo "🎉 Optimized deployment completed successfully!"

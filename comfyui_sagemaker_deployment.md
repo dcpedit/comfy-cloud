@@ -71,12 +71,17 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 
 **entrypoint.sh**:
 
+The entrypoint script now includes automatic S3 model synchronization. Set the `S3_MODELS_BUCKET` environment variable to enable automatic model syncing on container startup.
+
 ```bash
 #!/bin/bash
 set -e
 
-# Sync models from S3 (all your large models live here)
-aws s3 sync s3://your-model-bucket/comfyui/models /app/ComfyUI/models
+# Automatic S3 sync (when S3_MODELS_BUCKET is set)
+# This happens automatically - no manual intervention needed
+if [ -n "$S3_MODELS_BUCKET" ]; then
+    aws s3 sync s3://$S3_MODELS_BUCKET /app/ComfyUI/models
+fi
 
 # Start ComfyUI server in background
 python3 /app/ComfyUI/main.py --listen 0.0.0.0 --port 8188 --disable-auto-launch --verbose &
@@ -199,7 +204,82 @@ Your `inference.py` will inject actual file paths at runtime.
 
 ---
 
-## 5. Local Testing
+## 5. Automatic S3 Model Synchronization
+
+The Docker container now supports automatic model synchronization from S3 on startup. This eliminates the need to manually copy models and ensures your container always has the latest models.
+
+### Environment Variable Configuration
+
+Set the `S3_MODELS_BUCKET` environment variable to enable automatic S3 sync:
+
+```bash
+# For Docker run
+docker run --gpus all \
+  -e S3_MODELS_BUCKET=comfyui-models-dp \
+  -e AWS_ACCESS_KEY_ID=your_access_key \
+  -e AWS_SECRET_ACCESS_KEY=your_secret_key \
+  -e AWS_DEFAULT_REGION=us-east-1 \
+  -p 8080:8080 -p 8188:8188 \
+  comfyui-inference:latest
+```
+
+### Docker Compose Example
+
+```yaml
+version: '3.8'
+services:
+  comfyui:
+    image: comfyui-inference:latest
+    environment:
+      - S3_MODELS_BUCKET=comfyui-models-dp
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=us-east-1
+    ports:
+      - "8080:8080"
+      - "8188:8188"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+### Features
+
+- **Automatic Sync**: Models are automatically synced from S3 on container startup
+- **Error Handling**: If S3 sync fails, the container continues with existing models
+- **Optional**: If `S3_MODELS_BUCKET` is not set, the container works normally without S3 sync
+- **Progress Tracking**: Sync progress is logged to container output
+- **Incremental**: Only new/changed files are downloaded (S3 sync behavior)
+
+### AWS Permissions Required
+
+Your AWS credentials need the following S3 permissions:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::comfyui-models-dp",
+                "arn:aws:s3:::comfyui-models-dp/*"
+            ]
+        }
+    ]
+}
+```
+
+---
+
+## 6. Local Testing
 
 ### Mount local inputs
 ```bash
@@ -230,7 +310,7 @@ docker run --gpus all -it --rm   -v $(pwd)/test_inputs:/app/inputs   -v $(pwd)/t
 
 ---
 
-## 6. Deployment to SageMaker
+## 7. Deployment to SageMaker
 
 1. Push image to ECR:
    ```bash
@@ -239,10 +319,44 @@ docker run --gpus all -it --rm   -v $(pwd)/test_inputs:/app/inputs   -v $(pwd)/t
    docker push <account>.dkr.ecr.<region>.amazonaws.com/comfyui-inference:latest
    ```
 
-2. Create async endpoint in SageMaker (via boto3 or console).
+2. Configure SageMaker environment variables for S3 model sync:
+   ```json
+   {
+     "Environment": {
+       "S3_MODELS_BUCKET": "comfyui-models-dp"
+     }
+   }
+   ```
 
-3. Hook API Gateway → SageMaker Async → Client.  
+   Make sure your SageMaker execution role has S3 read permissions for the models bucket.
+
+3. Create async endpoint in SageMaker (via boto3 or console).
+
+4. Hook API Gateway → SageMaker Async → Client.
    SageMaker will drop outputs in S3, then your Lambda can call back client with result.
+
+### SageMaker IAM Role Requirements
+
+Your SageMaker execution role needs these additional permissions for S3 model sync:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::comfyui-models-dp",
+                "arn:aws:s3:::comfyui-models-dp/*"
+            ]
+        }
+    ]
+}
+```
 
 ---
 

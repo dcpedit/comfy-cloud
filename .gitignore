@@ -3,3 +3,4 @@ __pycache__
 test_outputs
 .env
 .ec2_public_ip
+.ec2_instance_id

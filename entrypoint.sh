@@ -20,10 +20,34 @@ wait_for_comfyui() {
     return 1
 }
 
+# Sync models from S3 bucket if specified
+if [ -n "$S3_MODELS_BUCKET" ]; then
+    echo "=== Syncing models from S3 bucket: $S3_MODELS_BUCKET ==="
+    echo "Starting S3 sync at $(date)"
+
+    # Check if AWS CLI is available and configured
+    if command -v aws >/dev/null 2>&1; then
+        # Create models directory if it doesn't exist
+        mkdir -p /app/ComfyUI/models
+
+        # Sync models from S3 with progress and error handling
+        echo "Syncing models from s3://$S3_MODELS_BUCKET to /app/ComfyUI/models..."
+        if aws s3 sync "s3://$S3_MODELS_BUCKET/" /app/ComfyUI/models --no-progress 2>&1; then
+            echo "✓ S3 sync completed successfully at $(date)"
+        else
+            echo "⚠ S3 sync failed, continuing with existing models..."
+        fi
+    else
+        echo "⚠ AWS CLI not available, skipping S3 sync"
+    fi
+else
+    echo "No S3_MODELS_BUCKET specified, using existing models"
+fi
+
 # Models are mounted from EBS volume at /app/ComfyUI/models
-echo "Using EBS-mounted models directory"
+echo "Using models directory: /app/ComfyUI/models"
 model_count=$(find /app/ComfyUI/models -type f 2>/dev/null | wc -l)
-echo "✓ Found $model_count model files on EBS volume."
+echo "✓ Found $model_count model files."
 
 # Create model directories if they don't exist
 mkdir -p /app/ComfyUI/models/{checkpoints,vae,loras,upscale_models,embeddings,clip,tts/VibeVoice}
