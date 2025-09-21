@@ -1,7 +1,7 @@
 {
   "120": {
     "inputs": {
-      "model": "Wan2_1-InfiniteTalk_Single_Q8.gguf"
+      "model": "Wan2_1-InfiniteTalk_Single_Q4_K_M.gguf"
     },
     "class_type": "MultiTalkModelLoader",
     "_meta": {
@@ -10,7 +10,7 @@
   },
   "122": {
     "inputs": {
-      "model": "wan2.1-i2v-14b-480p-Q8_0.gguf",
+      "model": "wan2.1-i2v-14b-480p-Q4_K_M.gguf",
       "base_precision": "fp16_fast",
       "quantization": "disabled",
       "load_device": "offload_device",
@@ -35,7 +35,7 @@
   },
   "125": {
     "inputs": {
-      "audio": "Voicy_Motivation #4.mp3",
+      "audio": "blackwidow.flac",
       "audioUI": ""
     },
     "class_type": "LoadAudio",
@@ -140,9 +140,9 @@
   },
   "134": {
     "inputs": {
-      "blocks_to_swap": 20,
-      "offload_img_emb": false,
-      "offload_txt_emb": false,
+      "blocks_to_swap": 40,
+      "offload_img_emb": true,
+      "offload_txt_emb": true,
       "use_non_blocking": true,
       "vace_blocks_to_swap": 0,
       "prefetch_blocks": 1,
@@ -207,6 +207,7 @@
       "colormatch": "disabled",
       "tiled_vae": false,
       "mode": "infinitetalk",
+      "output_path": "",
       "vae": [
         "129",
         0
@@ -299,7 +300,7 @@
   },
   "245": {
     "inputs": {
-      "value": 640
+      "value": 512
     },
     "class_type": "INTConstant",
     "_meta": {
@@ -308,7 +309,7 @@
   },
   "246": {
     "inputs": {
-      "value": 640
+      "value": 512
     },
     "class_type": "INTConstant",
     "_meta": {
@@ -317,7 +318,7 @@
   },
   "270": {
     "inputs": {
-      "value": 1000
+      "value": 275
     },
     "class_type": "INTConstant",
     "_meta": {
@@ -352,7 +353,7 @@
   },
   "284": {
     "inputs": {
-      "image": "headshot.jpg"
+      "image": "scarlett.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -373,7 +374,7 @@
   },
   "293": {
     "inputs": {
-      "preview": "",
+      "preview": "260",
       "source": [
         "194",
         2
